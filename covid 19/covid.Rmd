@@ -1,0 +1,542 @@
+---
+title: "COVID-19 Market Prediction Analysis"
+author: '[Xia Fu](https://xialalala.github.io/index.html)'
+date: "`r format(Sys.time(), '%d %B %Y')`"
+github: xialalala
+home: https://xialalala.github.io/index.html
+linkedin: Charlene
+mail: xiafu95@gmail.com
+color: '#69b3a2'
+bg: "covid.jpg"
+output: html_notebook
+---
+<style>
+div.blue {
+    background-color:rgba(105, 179, 172, 0.15); 
+    border-radius: 9px; 
+    padding: 20px;
+    font-weight:500;
+    font-size: 16px;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning = FALSE, message = FALSE,error=FALSE,class.source = 'fold-show')
+library(leaflet)
+library(dplyr)
+library(plm)
+library(RColorBrewer)
+library(ISLR)
+library(quantmod)
+library(PerformanceAnalytics)
+library(glmnet)
+```
+
+<br><br>
+
+# Intro
+***
+The financial market downturns happened recently because traders react to number of factors such as COVID-19, oil price. After knowing the COVID-19 data source of JHU, I planed to do some visualizations and models to see the inpact caused by COVID-19. 
+
+<br>
+
+# Web Scraping
+***
+The COVID-19 data is the underlying data used to produce JHU's famous JHU CSSE dashboard. To access the data, we need to access this [link to the repository](https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_daily_reports/)
+I scraped the data from 03/01/2020 to 4/30/2020 because there are missing coordicates for many countries before 03/01/2020. For some countries or area of countries, the missing latitude or longitude will lead to data missing in the final map. Thus, I assigned the coordicates to make sure they will show in the map. 
+
+```{r, warning=FALSE}
+datahome.url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_daily_reports/"
+
+dts <- c("03-01-2020","03-02-2020","03-03-2020",
+         "03-04-2020","03-05-2020","03-06-2020","03-07-2020","03-08-2020","03-09-2020",
+         "03-10-2020","03-11-2020","03-12-2020","03-13-2020","03-14-2020","03-15-2020",
+         "03-16-2020","03-17-2020","03-18-2020","03-19-2020","03-20-2020","03-21-2020",
+         "03-22-2020","03-23-2020","03-24-2020","03-25-2020","03-26-2020","03-27-2020",
+         "03-28-2020","03-29-2020","03-30-2020","03-31-2020","04-01-2020","04-02-2020",
+         "04-03-2020","04-04-2020","04-05-2020","04-06-2020","04-07-2020","04-08-2020",
+         "04-09-2020","04-10-2020","04-11-2020","04-12-2020","04-13-2020","04-14-2020",
+         "04-15-2020","04-16-2020","04-17-2020","04-18-2020","04-19-2020","04-20-2020",
+         "04-21-2020","04-22-2020","04-23-2020","04-24-2020","04-25-2020","04-26-2020",
+         "04-27-2020","04-28-2020","04-29-2020","04-30-2020")
+
+col.7 <- c("province.State", "Country.Region", "Last.Update", "Confirmed", "Deaths", "Recovered", "Date")
+col.9 <- c("province.State", "Country.Region", "Last.Update", "Confirmed", "Deaths", 
+           "Recovered", "Latitude", "Longitude", "Date")
+col.13 <- c("FIPS", "Admin2", "province.State", "Country.Region", "Last.Update",
+            "Latitude", "Longitude", "Confirmed", "Deaths", "Recovered","Active", "Combined.Key", "Date")
+
+covid.df <- list(NA)
+k <-1
+for (i in 1:length(dts)){
+  tmp <- tryCatch({
+    covid.df[[k]]<- read.csv(paste0(datahome.url, dts[i], ".csv", sep=""))
+    covid.df[[k]]$date <- as.Date(dts[i], format="%m-%d-%Y")
+    if (ncol(covid.df[[k]])==7){
+      names(covid.df[[k]])<-col.7
+    }else if (ncol(covid.df[[k]])==9){
+      names(covid.df[[k]])<-col.9
+    }else if (ncol(covid.df[[k]])==13){
+      names(covid.df[[k]])<- col.13
+    }else {}
+    k<-k+1
+   },
+   error = function(e){
+     message("* Data does not exist for ", dts[i])
+     print(e)
+   }
+  )
+}
+tmp <- lapply(covid.df, dim)
+
+# put data into a single dataframe
+df.full <- bind_rows(covid.df, .id = "column_label")
+
+# put three different location variables into a single column
+df.full$location <- paste(df.full$Admin2, df.full$Province.State, 
+                          df.full$Country.Region, sep=', ')
+
+```
+```{r, results='hide'}
+df.panel <- pdata.frame(df.full, index=c("location", "Date"))
+
+df.panel$Latitude[df.panel$Country.Region == "US"] <- 30.55435
+df.panel$Longitude[df.panel$Country.Region == "US"] <- -91.03677
+df.panel$Latitude[df.panel$Country.Region == "Canada"] <- 58.027164
+df.panel$Longitude[df.panel$Country.Region == "Canada"] <- -105.38086
+df.panel$Latitude[df.panel$Country.Region == "MS Zaandam"] <- 52.432999
+df.panel$Longitude[df.panel$Country.Region == "MS Zaandam"] <- -4.833
+df.panel$Latitude[df.panel$Country.Region == "United Kingdom"] <- 54.237933
+df.panel$Longitude[df.panel$Country.Region == "United Kingdom"] <- -2.36967
+df.panel$Latitude[df.panel$Country.Region == "Netherlands"] <- 52.132633
+df.panel$Longitude[df.panel$Country.Region == "Netherlands"] <- -5.291266
+df.panel$Latitude[df.panel$Country.Region == "France"] <- 47.824905
+df.panel$Longitude[df.panel$Country.Region == "France"] <- 2.618787
+
+df.panel
+```
+
+<br><br>
+
+## Topic 1⃣️: Visualizing confirmed cases in each country on 04/30/2020
+***
+### I.i Data Processing
+
+<br>
+
+I selected the data on 04/30/2020, removed the records where confirmed case is 0. I hope those confirmed case is 0 not showing in our map. We know that there are some cases confirmed on Cruises, such as Diamond Priness and Grand Princess, because this is not confirmed in country so that I removed those records.
+
+Then, grouping by `Country.Region` and `mutate()` other columns, and keep only the first record for each Country.
+
+```{r}
+my.cases <- df.panel[which(df.panel$Date == '2020-04-30'),]
+my.cases <- my.cases[which(my.cases$Confirmed != 0),]
+
+my.cases <- my.cases[which(my.cases$province.State!="Diamond Princess"),]
+my.cases <- my.cases[which(my.cases$province.State!="Grand Princess"),]
+
+my.cases<- my.cases[which(my.cases$Latitude != ""),]
+
+my.cases<- my.cases %>%
+  group_by(Country.Region)%>%
+  mutate(Confirmed.country=sum(Confirmed)) %>%
+  mutate(Deaths.country = sum(Deaths)) %>%
+  mutate (Recovered.country = sum(Recovered)) %>%
+  mutate (n= ifelse(row_number()==1, 1, 0)) %>%
+  mutate (Latitude = mean(Latitude)) %>%
+  mutate (Longitude = mean(Longitude)) %>%
+  ungroup()
+
+df.All.countries <- my.cases[which(my.cases$n==1),]
+
+df.All.countries$Confirmed <- df.All.countries$Confirmed.country
+df.All.countries$Deaths <- df.All.countries$Deaths.country
+df.All.countries$Recovered<-df.All.countries$Recovered.country
+df.All.countries$Confirmed.country<-NULL
+df.All.countries$Recovered.country<-NULL
+df.All.countries$Deaths.country<-NULL
+df.All.countries$n<-NULL
+df.All.countries$Last.Update<-NULL
+
+head(df.All.countries, 6)
+```
+
+<br>
+
+### I.ii Visualization
+
+<br>
+After cleaning and grouping, our data is ready for visualization. I added **circle markers** to indicate each country/region, and intuitively show the number of cases. Besides, in the tooltip, it gives more information including number of **deaths** and **recovered**. 
+
+```{r, fig.align="center"}
+big <- 12
+small <- 1
+df.All.countries$radius <- small+(log(1+df.All.countries$Confirmed)/log(max(df.All.countries$Confirmed)))*10
+
+# Create a color palette with handmade bins.
+mybins <- c( 0, 1000, 10000,50000, 100000, 500000, 1000000, max(df.All.countries$Confirmed) )
+mypalette <- colorBin( palette="YlOrBr", domain=df.All.countries$Confirmed, na.color="transparent", bins=mybins)
+
+# Prepare the text for the tooltip:
+mytext <- paste(
+  "Location: ", df.All.countries$location, "<br/>", #line breaks
+  "Confirmed: ", df.All.countries$Confirmed, "<br/>", 
+  "Deaths: ", df.All.countries$Deaths,"<br/>", 
+  "Recovered: ", df.All.countries$Recovered, sep="") %>%
+  lapply(htmltools::HTML)
+
+# Final Map
+m.day <- leaflet(df.All.countries) %>% 
+  addTiles()  %>% 
+  setView( lat=mean(df.All.countries$Latitude), 
+           lng=mean(df.All.countries$Longitude), zoom=2) %>%
+  addProviderTiles("Esri.WorldImagery") %>% #background map
+  addCircleMarkers(~Longitude, ~Latitude, 
+                   fillColor = ~mypalette(Confirmed), fillOpacity = 0.7, color="white", radius=~radius, 
+                   stroke=FALSE,label = mytext,
+                   labelOptions = labelOptions( style = list("font-weight" = "normal", 
+                                                  padding = "3px 8px"), textsize = "13px", direction = "auto")
+  ) %>%
+leaflet::addLegend(pal=mypalette, values=~Confirmed, opacity=0.9, title = "Confirmed Cases", position = "bottomright" )
+m.day
+```
+
+<div class='blue'>
+Now we have the above world map that shows the confirmed case on 04/30/2020. We can zoom in and out the map and click on the circle marker to get the detailed information about that country/region. 
+</div>
+
+<br><br>
+
+## Topic 2⃣: Time-series visualization of the confirmed cases
+***
+
+### II.i Data Processing
+
+<br>
+First, I selected the data from 2020-04-22 to 2020-04-30 to do the time-series analysis. Similarly, deleted the records that confirmed on the cruises and all records were grouped by `Country.Region` and `Date`. 
+
+```{r}
+df.All.regions <- df.panel
+
+df.All.regions$region.dates <- paste(df.All.regions$Country.Region, df.All.regions$Date, sep="")
+
+df.All.regions <- subset(df.All.regions, Date == '2020-04-22' | Date == '2020-04-23'| Date == '2020-04-24'| Date == '2020-04-25'| Date == '2020-04-26'| Date == '2020-04-27'| Date == '2020-04-28'| Date == '2020-04-29'| Date == '2020-04-30')
+
+df.All.regions <- df.All.regions[which(df.All.regions$province.State!="Diamond Princess"),]
+df.All.regions <- df.All.regions[which(df.All.regions$province.State!="Wuhan Evacuee"),]
+df.All.regions <- df.All.regions[which(df.All.regions$province.State!="Grand Princess"),]
+df.All.regions <- df.All.regions[which(df.All.regions$Country.Region!="Diamond Princess"),]
+
+df.All.regions<- df.All.regions %>%
+  group_by(region.dates)%>%
+  mutate(Confirmed.state=sum(Confirmed)) %>%
+  mutate(Deaths.state = sum(Deaths)) %>%
+  mutate (Recovered.state = sum(Recovered)) %>%
+  mutate (n= ifelse(row_number()==1, 1, 0)) %>%
+  mutate (Latitude = mean(Latitude)) %>%
+  mutate (Longitude = mean(Longitude)) %>%
+  ungroup()
+
+# keep only one observation for each state
+df.All.regions <- df.All.regions[which(df.All.regions$n==1),]
+
+df.All.regions$Confirmed <- df.All.regions$Confirmed.state
+df.All.regions$Deaths <- df.All.regions$Deaths.state
+df.All.regions$Recovered<-df.All.regions$Recovered.state
+df.All.regions$Confirmed.state<-NULL
+df.All.regions$Recovered.state<-NULL
+df.All.regions$Deaths.state<-NULL
+df.All.regions$n<-NULL
+df.All.regions$Last.Update<-NULL
+df.All.regions$FIPS<-NULL
+
+df.All.regions <- pdata.frame(df.All.regions, index=c("location", "Date"))
+
+head(df.All.regions,6)
+```
+<br>
+
+Used `lag()` function to generate a series of lags, then calculated the change `Confirmed.chg.1` (increase rate) and change over change `Confirmed.chg2`(rate of the increase rate), which is a second derivative since the "curve" is exponential.
+
+```{r}
+#generate a series of lags to view changes:
+df.All.regions$Confirmed.l1 <- lag(df.All.regions$Confirmed, 1)
+df.All.regions$Confirmed.l2 <- lag(df.All.regions$Confirmed, 2)
+df.All.regions$Confirmed.l3 <- lag(df.All.regions$Confirmed, 3)
+df.All.regions$Confirmed.l4 <- lag(df.All.regions$Confirmed, 4)
+df.All.regions$Confirmed.l5 <- lag(df.All.regions$Confirmed, 5)
+df.All.regions$Confirmed.l6 <- lag(df.All.regions$Confirmed, 6)
+
+# One-period % changes:
+df.All.regions$Confirmed.chg.1 <- round((df.All.regions$Confirmed - lag(df.All.regions$Confirmed)) / lag(df.All.regions$Confirmed),4)
+
+# Change of the change (approx a second derivative since the "curve" is exponential)
+df.All.regions$Confirmed.chg.2 <- round((df.All.regions$Confirmed.chg.1 - lag(df.All.regions$Confirmed.chg.1)) / lag(df.All.regions$Confirmed.chg.1),4)
+
+df.All.regions$Confirmed.chg.1[which(!is.finite(df.All.regions$Confirmed.chg.1))] <-NA
+df.All.regions$Confirmed.chg.2[which(!is.finite(df.All.regions$Confirmed.chg.2))] <-NA
+
+head(df.All.regions, 6)
+```
+<br>
+Next, grouped by the location and made small changes to each `latitute` in order to show it in a layered effect on the map.
+
+```{r}
+# Let's shift the latitute to the up for more recent days:
+df.All.regions.plt <- df.All.regions
+df.All.regions.plt <- df.All.regions.plt %>%
+  group_by(location) %>%
+  mutate(N = row_number()) %>%
+  ungroup()
+# Define a shifting paramter:
+alpha <- 0.5
+df.All.regions.plt$Latitude <- df.All.regions.plt$Latitude + (df.All.regions.plt$N - 1)*alpha
+
+head(df.All.regions.plt$Latitude, 6)
+```
+<br>
+
+### II.ii Visualization
+
+<br>
+Drew the map. The size of the circle marker is determined by the number of confirmed cases on that day. But the color depends on the increase rate, so we can know easily know the diffusion rate of COVID-19 in each country and in time series.
+
+```{r, fig.align="center", warning=FALSE}
+big <- 20
+small <- 5
+
+df.All.regions.plt$radius <- small + ((df.All.regions.plt$Confirmed)/
+                                        max(df.All.regions.plt$Confirmed, na.rm = T)) * (big-small)
+
+mybins <- c(-1, 0, 0.05, 0.1, 0.2, 0.5, max(df.All.regions.plt$Confirmed.chg.1, na.rm=T) )
+mypalette <- colorBin( palette= c("yellow", "orange", "red"), 
+                       domain=df.All.regions.plt$Confirmed.chg.1, na.color="transparent", bins=mybins)
+
+# Prepare the text for the tooltip:
+mytext <- paste(
+  "Location: ", df.All.regions.plt$location, "<br/>", #line breaks
+  "% Increase: ", df.All.regions.plt$Confirmed.chg.1, "<br/>", 
+  "% Chg of Chg: ", df.All.regions.plt$Confirmed.chg.2, "<br/>",
+  "Confirmed: ", df.All.regions.plt$Confirmed, "<br/>", 
+  "Deaths: ", df.All.regions.plt$Deaths,"<br/>", 
+  "Day: ", df.All.regions.plt$N, "<br/>",
+  "Recovered: ", df.All.regions.plt$Recovered, sep="") %>%
+  lapply(htmltools::HTML)
+
+# Final Map
+m.chg <- leaflet(df.All.regions.plt) %>% 
+  addTiles()  %>% 
+  setView( lat=mean(df.All.regions.plt$Latitude), 
+           lng=mean(df.All.regions.plt$Longitude), zoom=2) %>%
+  addProviderTiles("Esri.WorldStreetMap") %>% #background map
+  addCircleMarkers(~Longitude, ~Latitude, 
+                   fillColor = ~mypalette(Confirmed.chg.1), fillOpacity = 0.7, color="white", radius=~radius, 
+                   stroke=FALSE,label = mytext,
+                   labelOptions = labelOptions( style = list("font-weight" = "normal", 
+                                                             padding = "8px 8px"), textsize = "13px", direction = "auto")
+  ) %>%
+leaflet::addLegend(pal=mypalette, values=~Confirmed.chg.1, opacity=0.9, title = "Increase Rate", position = "bottomright" )
+
+m.chg
+```
+
+<div class='blue'>
+From the map, we can see the growth of COVID-19 in different countries. For some countries, such as the Maldives, the growth has increased (change over change is positive) during thees days, which indicates that the situation is more severer. For some other countries, like Singpore, the growth rate gradually declining, which is a good trend.
+</div>
+
+<br><br>
+
+
+## Topic 3⃣: Modeling to predict the trend of the market
+***
+Under this topic, I downloaded the S&P 500 stock data through the **"quantmod"** package  Because the development of COVID-19 in different states is very different, and New York State is currently in the most severe situation, so I use New York State COVID-19 data to predict market returns. Another reason is that New York is the financial center of the world, and its situation may affect the attitude of stock investors and the development of the stock market more drastically. My goal is to build a simple model to gain some insights about the relationship between financial markets and COVID-19.
+<br>
+
+### III.i Data processing
+
+Selected US only data from `df.panel`, then group by state and date. Kept only the records happened in New York State, and calculated the **death rate**, **increase rate** and **change over change rate**. Finally, removed unrelated columns.
+```{r}
+
+df.US.states <- df.panel
+df.US.states <- df.US.states[which(df.US.states$Country.Region == "US"),]
+df.US.states$state.date <- paste(df.US.states$province.State,df.US.states$Date,sep="")
+df.US.states <- df.US.states %>%
+  group_by(state.date) %>%
+  mutate(Confirmed.state = sum(Confirmed)) %>%
+  mutate(Deaths.state = sum(Deaths)) %>%
+  mutate(Recovered.state = sum(Recovered)) %>%
+  mutate(n = ifelse(row_number() == 1, 1, 0)) %>%
+  mutate(Latitude = mean(Latitude[which(Latitude>0)])) %>%
+  mutate(Longitude = mean(Longitude[which(Longitude<0)])) %>%
+  ungroup()
+
+# Keep only one observation per state - date:
+df.US.states <- df.US.states[which(df.US.states$n == 1),]
+
+# Retained the data only about New York State, group by New York and sum up all the numbers.
+df.NY<- subset(df.US.states, province.State == "New York" |province.State == "New York City, NY"|province.State == "New York County, NY",)
+
+df.NY$Confirmed <- df.NY$Confirmed.state
+df.NY$Deaths <- df.NY$Deaths.state
+df.NY$Recovered <- df.NY$Recovered.state
+df.NY$Confirmed.state <- NULL
+df.NY$Deaths.state <- NULL
+df.NY$Recovered.state <- NULL
+df.NY$n <- NULL
+df.NY$Last.Update <- NULL
+
+#reset index
+df.NY <- pdata.frame(df.NY, index=c("Country.Region", "Date"))
+# calculate the confirmed rate
+df.NY$Confirmed.chg.1 <- (df.NY$Confirmed - lag(df.NY$Confirmed)) / lag(df.NY$Confirmed)
+df.NY$Confirmed.chg.2 <- (df.NY$Confirmed.chg.1 - lag(df.NY$Confirmed.chg.1)) / lag(df.NY$Confirmed.chg.1)
+# calculate the death rate
+df.NY$death.rate <- df.NY$Deaths/df.NY$Confirmed
+
+df.NY$death.rate[which(!is.finite(df.NY$death.rate))] <- 0
+df.NY$Confirmed.chg.1[which(!is.finite(df.NY$Confirmed.chg.1))] <-NA
+df.NY$Confirmed.chg.2[which(!is.finite(df.NY$Confirmed.chg.2))] <-NA
+#clean
+df.NY$column_label<- NULL
+df.NY$province.State <- NULL
+df.NY$Country.Region <- NULL
+df.NY$Latitude <- NULL
+df.NY$Longitude<- NULL
+df.NY$Combined.Key <- NULL
+df.NY$state.date <- NULL
+df.NY$FIPS <- NULL
+df.NY$Active <- NULL
+df.NY$Admin2 <- NULL
+df.NY$location <- NULL
+head(df.NY,6)
+```
+<br>
+Downloaded the S&P500 data. `SPY` is the ticker symbol that we targeted, which correspond to the ticker on Yahoo Finance. Then calculated the return for each day.
+```{r, warning=FALSE}
+tics<-c("SPY")
+P.list<-lapply(tics, function(tic)
+  get(getSymbols(tic, from = "2020-02-01", to = '2020-04-30' )))
+
+# get the adjusted prices into a single object
+P.adj <- lapply(P.list, function(p) p[,6])
+# Merge the elements of the list
+P <- Reduce(merge,P.adj)
+names(P) <- tics
+
+#calculate the return of each day.
+cal_P <- Return.calculate(P)
+
+H <- data.frame(cal_P)
+H <- cbind(Date = rownames(H), H)
+rownames(H) <- 1:nrow(H)
+head(H, 6)
+```
+<br>
+Now we have two cleaned datasets from different data sources. The next step is to use `merge()` function to put them in one datafram by `Date`.
+```{r}
+one.NYF <- merge(x=H,y=df.NY,by="Date",all.x=TRUE)
+
+# clean
+one.NYF$Date<-NULL
+
+one.NYF <- na.omit(one.NYF)
+one.NYF
+```
+<br>
+
+### III.ii Modeling
+
+<br>
+
+#### 🌟Lasso regression model
+
+<br> 
+First, I applied lasso regression algorithm. Used grid search to find the minimized mean square error and the optimal lambda.
+
+```{r}
+# split data
+x.train <- model.matrix(SPY~., one.NYF)
+y.train <- one.NYF$SPY
+
+#define mse function
+my.mse <- function(pred,act){
+  mse <- mean((pred-act)^2)
+  return(mse)
+}
+
+MSE <- c(NA)
+set.seed(1234)
+grid <- 10^seq(5,-5,by = -.1)
+
+# model
+lasso.fit <- glmnet(x.train,y.train,alpha=1,lambda=grid)
+plot(lasso.fit, xvar = "lambda", label = TRUE)  
+# Compute the MSE of each model
+
+for(i in 1:length(grid)){
+  lasso.pred.tmp <- predict(lasso.fit,s=grid[i],newx <- x.train)
+  MSE[i] <- my.mse(lasso.pred.tmp,y.train)
+}
+min(MSE)
+
+#select best lambda
+lambda.star <- grid[which.min(MSE)]
+lambda.star
+
+# predicting for same data
+y_predicted <- predict(lasso.fit, s = lambda.star, newx = x.train)
+
+# calculate R square
+sst <- sum((y.train - mean(y_predicted))^2)
+ssr <- sum((y_predicted-y.train)^2)
+rsq <- 1 - ssr / sst
+rsq
+
+# print coefficients of each variables
+coef_lasso<-coef(lasso.fit,s=lambda.star)
+coef_lasso
+
+```
+<div class='blue'>
+Because this dataset is very small, it is hard to perfectly converge. We can see that the R square (0.117) is a small number. But we can get the coefficients of the variables, from which we can have idea about the variables. For exmaple, we can see that the coefficient of `death.rate` is relative larger than others', which indicates that it might be an important variable that negatively affect the market.
+</div>
+<br>
+
+#### 🌟Decision Tree Regression model
+
+<br>
+I used the `tree` package to build the decision tree model. I also plotted the tree and then annotate it using the handy `text` function:
+
+```{r, results='hide'}
+library(rpart)
+library(rpart.plot)
+```
+
+```{r}
+# Create a decision tree model
+tree <- rpart(SPY~., data=one.NYF, cp=.001)
+# Visualize the decision tree with rpart.plot
+rpart.plot(tree, box.palette="RdBu", shadow.col="gray", nn=TRUE)
+```
+<br>
+At each splitting node, the variables and the value of the splitting choice are shown (for example, Confirmed.chg.1< -0.15 or Confirmed >=71e+3).
+
+```{r}
+# predict
+tree.pred = predict(tree, one.NYF[, -c(1)])
+#mean square error
+tree.mse=my.mse(tree.pred,y.train)
+tree.mse
+```
+<div class='blue'>
+Because this dataset only contains 38 records, so that I didn't conduct the pruning step. The mean squared error of the decision tree regressor `[1]` is less than Lasso regression model. The factors 'number of confirmed cases', 'increase rate'and 'change over change rate' show critical role at splitting node. I believe the accuracy will be higher when there are more data to be trained in this model. 
+</div>
+<br><br>
+
+#### The Last
+<div class='blue'>
+If we want to predict the market trend more correctly, more factors and data records should be included. However, the market largely depends on the attitudes of traders'.  COVID-19 only lead to people's panic in a short time. After people learn more about it, people's decisions in financial market will rarely be affected by COVID-19. But still, from this and further, we can know that how people's action be affected by which factor. In this project, three factors showed high importance: number of confirmed cases, increase rate, change over change rate and death rate.
+</div>
+
+
+
